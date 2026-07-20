@@ -1,64 +1,199 @@
-# Azure End-to-End Data Engineering Project: Car Sales Analytics Pipeline
+````markdown
+# 🚗 Azure End-to-End Data Engineering Project: Car Sales Analytics Pipeline
 
 ## 📌 Project Overview
-This project implements an enterprise-grade cloud data solution that migrates transactional car sales data into a Medallion-structured Lakehouse. It features automated metadata-driven incremental data loading, data governance via Unity Catalog, Star Schema dimensional modeling, parallelized task orchestration, and SCD Type 1 upsert mechanics.
 
-## 🏗️ Data Architecture Diagram
-*(Pro-tip: Sketch a quick block diagram using Excalidraw or Draw.io using Azure/Databricks icons, save it as an image, upload it to this repository, and link it here!)*
-![Architecture Diagram](your_uploaded_image_name.png)
+This project implements an enterprise-grade cloud data engineering solution that migrates transactional car sales data into a Medallion-structured Lakehouse architecture on Microsoft Azure.
 
----
-
-## 🚀 Key Features & Implementation Details
-
-### 1. Source System & Incremental Ingestion (ADF)
-* **Data Source:** Azure SQL Database acting as the live transactional system.
-* **Orchestration Pattern:** Implemented a metadata-driven high-watermark pattern utilizing twin lookup activities:
-  * **Last Load Lookup:** Fetches the historical high-watermark checkpoint from a dedicated database logging table.
-  * **Current Max Lookup:** Executes a dynamic `MAX(date_id)` query against the active transactional engine.
-* **Delta Data Capture:** Programmed parameterized dynamic source expressions to parse and extract *only* newly created records matching interval thresholds.
-* **Post-Execution Logging:** Triggers a transaction-safe stored procedure (`UpdateWatermarkTable`) upon ingestion success to commit the new execution threshold forward.
-
-👉 `[Click here to view the pipeline JSON configurations](./adf/)`  
-👉 `[Click here to view the staging records folder](./raw_data/)`
-
-### 🗄️ Database State Control & Reset Automation
-To handle development testing and absolute reproducibility, specialized database scripts were engineered to manage state:
-* **Atomic State Updates:** Built a robust stored procedure encapsulated within explicit database transactions (`BEGIN TRANSACTION` and `COMMIT TRANSACTION`) to prevent logging drift.
-* **Pipeline Repeatability:** Automated quick-reset environments utilizing staging `TRUNCATE` actions and state flushes (resetting criteria to `DT00000`). This allows the infrastructure to pivot cleanly between bulk historical initial runs and live incremental runs during data validation.
-
-👉 `[Click here to view the complete SQL Checkpoint Setup Script](./database_scripts/watermark_control_setup.sql)`
-
-### 2. Lakehouse Architecture & Security (Databricks + Unity Catalog)
-* **Data Governance:** Abandoned legacy, insecure root DBFS directory mounting in favor of robust Unity Catalog configurations. Formed dedicated **External Locations** bound explicitly via an underlying **Azure Access Connector** managed identity.
-* **Storage Optimization:** Landed incoming records utilizing highly compressed raw **Parquet** structures, transitioning into ACID-compliant **Delta Lake** formats for advanced data versioning, schema enforcement, and high-velocity upserts.
-
-### 3. Transformation & Dimensional Modeling (Gold Layer)
-* **Feature Engineering:** Leveraged PySpark (`withColumn`, `split`) to isolate hidden structural metadata from raw inputs (e.g., parsing hyphenated code layers to cleanly track high-level model categories).
-* **Star Schema Realization:** Broke down flat transactional files into an optimized relational data model to drive business intelligence:
-  * **Dynamic Surrogate Keys:** Calculated non-overlapping, unique surrogate constraint IDs on the fly by scanning existing maximum constraints during incremental streams.
-  * **SCD Type 1 Enforcement:** Maintained reporting dimensions under clean **SCD Type 1 (Slowly Changing Dimensions)** configurations using targeted `DeltaTable.merge()` upsert conditions.
-  * **Fact Table Alignment:** Formed a highly consolidated **Fact Sales Table** containing atomic measurements and operational indicators paired tightly with downstream dimension keys.
-
-👉 `[Click here to view the PySpark & SQL notebooks](./databricks_notebooks/)`
+It features automated metadata-driven high-watermark incremental ingestion, unified data governance using Azure Databricks with Unity Catalog, Star Schema dimensional modeling, parallelized workflow DAG orchestration, and SCD Type 1 upsert mechanics.
 
 ---
 
-## 🔄 Workflow Orchestration & Dependency Graph
+# 🏗️ Architecture & Storage Setup
 
-The entire downstream pipeline is fully automated and performance-optimized via **Databricks Workflows**. To drastically minimize cluster runtime and execution costs, the dimensional layers spin up concurrently rather than waiting on a traditional sequential loop.
+## 1. Azure Infrastructure Setup
 
-![Databricks Workflow Dependency Graph](./execution_snapshots/databricks_workflow.png)
+All resources—including Azure Data Factory, Azure SQL Database, ADLS Gen2 Storage, and Azure Databricks—are deployed in a unified Azure Resource Group.
 
-### Execution Sequence:
-1. **Silver Transformation Data Layer:** The ingestion engine kicks off the `silver_notebook` to parse raw fields, structure metrics, and write to Silver Storage.
-2. **Parallel Dimension Processing:** Upon successful write to Silver, 4 independent tasks (`Dim_Branch`, `Dim_Date`, `Dim_Dealer`, and `Dim_Model`) initiate simultaneously to run their respective delta constraints and update Lookups in parallel.
-3. **Gold Fact Integration:** The terminal process, `fact_Sales`, evaluates upstream conditions and triggers immediately upon successful completion of all four dimension tasks to aggregate final reporting tables.
+![Azure Resource Group Overview](Images/azure_infrastructure_images/resource_group_overview.png)
+
+## 2. Medallion Storage Layer Structure (ADLS Gen2)
+
+Data is organized into three distinct containers following the Medallion Architecture pattern:
+
+### Bronze Container (`raw_data/`)
+
+Ingests raw transactional Parquet files extracted from the SQL source.
+
+![Bronze Container Overview](Images/azure_infrastructure_images/adls_containers_overview.png)
+
+![Bronze Raw Files](Images/azure_infrastructure_images/adls_bronze_layer.png)
+
+### Silver Container (`car_sales/`)
+
+Stores cleaned, schema-enforced, and feature-engineered Parquet datasets.
+
+![Silver Layer Data](Images/azure_infrastructure_images/adls_silver_layer.png)
+
+### Gold Container (Delta Lake Storage)
+
+Holds Star Schema dimensional Delta tables (`dim_branch`, `dim_date`, `dim_dealer`, `dim_model`, and `factsales`).
+
+![Gold Layer Dimensions & Facts](Images/azure_infrastructure_images/adls_gold_layer.png)
+
+![Delta Transaction Logs](Images/databricks_images/delta_lake_transaction_log.png)
 
 ---
 
-## 📈 Final Insights & Execution Snapshots
+# 🚀 Data Pipeline Ingestion & Orchestration (ADF)
 
-Recruiters and data consumers can track the exact runtime behaviors, visualization charts, schema printouts, and system query parameters generated by the clusters without needing an active Azure subscription. 
+## 1. Source Preparation Pipeline (`source_prep`)
 
-👉 `[Click here to explore the interactive cell output files](./execution_snapshots/)`
+Ingests initial and incremental source dataset files from GitHub HTTP endpoints directly into Azure SQL Database (`dbo.source_cars_data`).
+
+### Source Configuration (Dynamic Parameter Ingestion)
+
+![Source Settings](Images/Source_prep_images/copy_git_data_source_settings.png)
+
+### Sink Configuration (Azure SQL Database Ingestion)
+
+![Sink Settings](Images/Source_prep_images/copy_git_data_sink_settings.png)
+
+![SQL Dataset Connection](Images/Source_prep_images/sql_sink_dataset_connection.png)
+
+### Execution Output
+
+![Source Prep Debug Run](Images/Source_prep_images/source_prep_debug_output.png)
+
+👉 [Click here to view Source Prep JSON Definition](./adf/source_prep.json)
+
+---
+
+## 2. Metadata-Driven Incremental Pipeline (`increm_data_pipeline`)
+
+Executes Change Data Capture (CDC) using a high-watermark approach to query and extract only newly added records from Azure SQL into the ADLS Gen2 Bronze container.
+
+![Incremental Pipeline Canvas](Images/Incremental_pipeline_images/incremental_pipeline_canvas.png)
+
+### Ingestion Workflow Mechanics
+
+1. **Last Load Checkpoint Lookup:** Queries `dbo.water_table` to get the last processed high-watermark (`last_load`).
+
+   ![Last Load Lookup Query](Images/Incremental_pipeline_images/lookup_last_load_query.png)
+
+2. **Current Load Max Lookup:** Queries active transactional table `dbo.source_cars_data` for the latest maximum identifier (`SELECT MAX(Date_Id) AS max_date`).
+
+   ![Current Load Lookup Query](Images/Incremental_pipeline_images/lookup_current_load_query.png)
+
+3. **Incremental Copy Activity:** Filters and pulls records where `Date_Id > last_load AND Date_Id <= max_date` and writes Snappy-compressed Parquet files to `bronze/raw_data`.
+
+   ![Copy Incremental Query](Images/Incremental_pipeline_images/copy_incremental_source_query.png)
+
+   ![Copy Sink Settings](Images/Incremental_pipeline_images/copy_incremental_sink_dataset.png)
+
+   ![Bronze Parquet Dataset Connection](Images/Incremental_pipeline_images/ds_bronze_parquet_connection.png)
+
+4. **Watermark State Update:** Calls stored procedure `dbo.UpdateWatermarkTable` to advance the checkpoint state to the current `max_date`.
+
+   ![Watermark Stored Procedure Parameter](Images/Incremental_pipeline_images/watermark_sp_parameter_binding.png)
+
+   ![Watermark Expression Builder](Images/Incremental_pipeline_images/watermark_sp_expression_builder.png)
+
+5. **Pipeline Debug Execution Output**
+
+   ![Incremental Pipeline Debug Output](Images/Incremental_pipeline_images/incremental_pipeline_debug_output.png)
+
+👉 [Click here to view Incremental Pipeline JSON Definition](./adf/increm_data_pipeline.json)
+
+---
+
+# 🗄️ Database Control & Watermark Logging
+
+State maintenance is controlled via dedicated SQL DDL statements and transactional stored procedures.
+
+### Watermark Query State Verification
+
+![SQL Watermark Query Verification](Images/azure_infrastructure_images/sql_watermark_query.png)
+
+### Atomic Transaction Update Script
+
+```sql
+CREATE PROCEDURE UpdateWatermarkTable
+    @lastload VARCHAR(200)
+AS
+BEGIN
+    BEGIN TRANSACTION;
+    UPDATE water_table
+    SET last_load = @lastload;
+    COMMIT TRANSACTION;
+END;
+```
+
+👉 [Click here to view full SQL database setup scripts](./database_scripts/watermark_control_setup.sql)
+
+---
+## 🔐 Lakehouse Security & Governance (Unity Catalog)
+
+Rather than using legacy root DBFS directory mounts, governance and storage access are managed via Unity Catalog and standard Azure Security Controls.
+
+### Identity & Access Management (IAM)
+
+An Azure Access Connector managed identity (`carsaccessconector`) is assigned Storage Blob Data Contributor access on the ADLS Gen2 lakehouse.
+
+![Access Connector IAM Config](Images/azure_infrastructure_images/databricks_access_connector_iam.png)
+
+### External Locations & Catalog
+
+Unity Catalog external locations utilize the storage credential bound to the Access Connector, enforcing strict schema control across silver and gold layers.
+
+# 🛠️ Databricks Transformations & Star Schema Modeling
+
+Transformations are built using PySpark inside Databricks notebooks.
+
+## 1. Silver Layer (`silver_notebook.py`)
+
+Cleanses raw ingestion datasets from Bronze.
+
+Performs feature engineering (e.g., parsing `model_id` using `split()` and `withColumn()` to generate `model_category`).
+
+Calculates operational KPIs such as `Revenue_per_unit`.
+
+Overwrites standardized Parquet records into `silver/car_sales/`.
+
+## 2. Gold Layer Star Schema (`gold_dim_*.py` & `gold_fact_sales.py`)
+
+### Surrogate Key Generation
+
+Calculates dynamic surrogate key offsets (`monotonically_increasing_id() + max_key`) to handle continuous ID assignment during incremental stream runs.
+
+### SCD Type 1 Upserts
+
+Implements Slowly Changing Dimensions (SCD Type 1) via PySpark `DeltaTable.merge()` functions to update existing dimension attribute changes and insert new records seamlessly.
+
+### Fact Table Integration
+
+Combines numerical metrics (`Revenue`, `Units_Sold`, `Revenue_per_unit`) with the newly generated surrogate keys (`dim_branch_key`, `dim_date_key`, `dim_dealer_key`, `dim_model_key`).
+
+👉 [Click here to explore all Databricks transformation PySpark code](./databricks_notebooks/)
+
+---
+
+## 🔄 Workflow Orchestration DAG (Databricks Workflows)
+
+The downstream Silver-to-Gold pipeline execution is orchestrated using Databricks Jobs (Workflows).
+
+![Databricks Workflow Execution Graph](Images/databricks_images/databricks_workflow_dag.png)
+
+### Parallel Execution Flow
+
+- **Silver_Data Task:** Processes raw Bronze data into Silver Parquet format.
+- **Parallel Dimension Tasks:** Once Silver completes, four dimension tasks (**Dim_Branch**, **Dim_Date**, **Dim_Dealer**, **Dim_Model**) trigger simultaneously in parallel to execute their respective SCD Type 1 merge routines.
+- **fact_Sales Task:** Triggers automatically upon the successful completion of all upstream dimension tasks to write updated Star Schema fact data to Gold.
+
+---
+
+## 📊 Interactive Notebook Execution Logs
+
+Full cell outputs, data preview tables, and execution metrics are captured as standalone HTML files, enabling offline verification without an active Azure subscription.
+
+👉 [Click here to view interactive execution snapshots](./execution_snapshots/)
